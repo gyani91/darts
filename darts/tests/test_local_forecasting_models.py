@@ -7,7 +7,7 @@ from .base_test_class import DartsBaseTestClass
 from ..timeseries import TimeSeries
 from ..utils import timeseries_generation as tg
 from ..metrics import mape
-from ..models import NaiveSeasonal, ExponentialSmoothing, ARIMA, Theta, FourTheta, FFT
+from ..models import NaiveSeasonal, ExponentialSmoothing, ARIMA, Theta, FourTheta, FFT, VARIMA
 from ..utils.utils import SeasonalityMode, TrendMode, ModelMode
 from ..logging import get_logger
 
@@ -29,6 +29,13 @@ models = [
     (FFT(trend='poly'), 11.4),
     (NaiveSeasonal(), 32.4),
 ]
+# forecasting models with exogenous variables support
+multivariate_models = [
+    (VARIMA(1, 0, 0), 55.6),
+    (VARIMA(1, 1, 1), 57.0),
+]
+
+extended_models = [ARIMA()]
 
 try:
     from ..models import Prophet
@@ -39,6 +46,7 @@ except ImportError:
 try:
     from ..models import AutoARIMA
     models.append((AutoARIMA(), 13.7))
+    extended_models.append(AutoARIMA())
 except ImportError:
     logger.warning('pmdarima not installed - will be skipping AutoARIMA tests')
 
@@ -64,6 +72,11 @@ class LocalForecastingModelsTestCase(DartsBaseTestClass):
     ts_passengers = TimeSeries.from_dataframe(df, 'Month', ['#Passengers'])
     ts_pass_train, ts_pass_val = ts_passengers.split_after(pd.Timestamp('19570101'))
 
+    # real multivariate timeseries for functionality tests
+    multivariate_df = pd.read_csv('examples/ice_cream_heater.csv', delimiter=",")
+    ts_ice_heater = TimeSeries.from_dataframe(multivariate_df, 'Month', ['ice cream', 'heater'])
+    ts_ice_heater_train, ts_ice_heater_val = ts_ice_heater.split_after(split_point=0.7)
+
     def test_models_runnability(self):
         for model, _ in models:
             model.fit(self.ts_gaussian)
@@ -79,6 +92,15 @@ class LocalForecastingModelsTestCase(DartsBaseTestClass):
             self.assertTrue(current_mape < max_mape, "{} model exceeded the maximum MAPE of {}."
                             "with a MAPE of {}".format(str(model), max_mape, current_mape))
 
+    def test_multivariate_models_performance(self):
+        # for every model, check whether its errors do not exceed the given bounds
+        for model, max_mape in multivariate_models:
+            model.fit(self.ts_ice_heater_train)
+            prediction = model.predict(len(self.ts_ice_heater_val))
+            current_mape = mape(prediction, self.ts_ice_heater_val)
+            self.assertTrue(current_mape < max_mape, "{} model exceeded the maximum MAPE of {}."
+                            "with a MAPE of {}".format(str(model), max_mape, current_mape))
+
     def test_multivariate_input(self):
         es_model = ExponentialSmoothing()
         ts_passengers_enhanced = self.ts_passengers.add_datetime_attribute('month')
@@ -87,3 +109,25 @@ class LocalForecastingModelsTestCase(DartsBaseTestClass):
         es_model.fit(ts_passengers_enhanced["#Passengers"])
         with self.assertRaises(KeyError):
             es_model.fit(ts_passengers_enhanced["2"])
+
+    def test_exogenous_variables_support(self):
+        for model in extended_models:
+
+            # Test models runnability
+            model.fit(self.ts_gaussian, exog=self.ts_gaussian)
+            prediction = model.predict(
+                self.forecasting_horizon,
+                exog=tg.gaussian_timeseries(length=self.forecasting_horizon))
+            self.assertTrue(len(prediction) == self.forecasting_horizon)
+
+            # Test mismatch in length between exogenous variables and forecasting horizon
+            with self.assertRaises(ValueError):
+                model.predict(
+                    self.forecasting_horizon,
+                    exog=tg.gaussian_timeseries(length=self.forecasting_horizon - 1))
+
+            # Test mismatch in time-index/length between series and exogenous variables
+            with self.assertRaises(ValueError):
+                model.fit(self.ts_gaussian, exog=self.ts_gaussian[:-1])
+            with self.assertRaises(ValueError):
+                model.fit(self.ts_gaussian[1:], exog=self.ts_gaussian[:-1])

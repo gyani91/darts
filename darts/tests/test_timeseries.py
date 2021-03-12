@@ -108,8 +108,33 @@ class TimeSeriesTestCase(DartsBaseTestClass):
         test_case.assertEqual(seriesC.end_time(), pd.Timestamp('20130103'))
         test_case.assertEqual(seriesD.start_time(), pd.Timestamp('20130104'))
 
+        seriesE, seriesF = test_series.split_after(0.7)
+        test_case.assertEqual(len(seriesE), round(0.7 * len(test_series)))
+        test_case.assertEqual(len(seriesF), round(0.3 * len(test_series)))
+
+        seriesG, seriesH = test_series.split_before(0.7)
+        test_case.assertEqual(len(seriesG), round(0.7 * len(test_series)) - 1)
+        test_case.assertEqual(len(seriesH), round(0.3 * len(test_series)) + 1)
+
+        seriesI, seriesJ = test_series.split_after(5)
+        test_case.assertEqual(len(seriesI), 6)
+        test_case.assertEqual(len(seriesJ), len(test_series) - 6)
+
+        seriesK, seriesL = test_series.split_before(5)
+        test_case.assertEqual(len(seriesK), 5)
+        test_case.assertEqual(len(seriesL), len(test_series) - 5)
+
         test_case.assertEqual(test_series.freq_str(), seriesA.freq_str())
         test_case.assertEqual(test_series.freq_str(), seriesC.freq_str())
+        test_case.assertEqual(test_series.freq_str(), seriesE.freq_str())
+        test_case.assertEqual(test_series.freq_str(), seriesG.freq_str())
+        test_case.assertEqual(test_series.freq_str(), seriesI.freq_str())
+        test_case.assertEqual(test_series.freq_str(), seriesK.freq_str())
+
+        # Test split points outside of range
+        for value in [-5, 1.1, pd.Timestamp('21300104')]:
+            with test_case.assertRaises(ValueError):
+                test_series.split_before(value)
 
     @staticmethod
     def helper_test_drop(test_case, test_series: TimeSeries):
@@ -411,6 +436,23 @@ class TimeSeriesTestCase(DartsBaseTestClass):
         # test successful instantiation of TimeSeries with length 2
         TimeSeries.from_times_and_values(pd.date_range('20130101', '20130102'), range(2), freq='D')
 
+    def test_from_dataframe(self):
+        data_dict = {"Month": pd.date_range(start="20180501", end="20200301", freq="MS")}
+        data_dict["Values1"] = np.random.uniform(low=-10, high=10, size=len(data_dict["Month"]))
+        data_dict["Values2"] = np.random.uniform(low=0, high=1, size=len(data_dict["Month"]))
+
+        data_pd1 = pd.DataFrame(data_dict)
+        data_pd2 = data_pd1.copy()
+        data_pd2["Month"] = data_pd2["Month"].apply(lambda date: str(date))
+        data_pd3 = data_pd1.set_index("Month")
+
+        data_darts1 = TimeSeries.from_dataframe(df=data_pd1, time_col="Month")
+        data_darts2 = TimeSeries.from_dataframe(df=data_pd2, time_col="Month")
+        data_darts3 = TimeSeries.from_dataframe(df=data_pd3)
+
+        self.assertEqual(data_darts1, data_darts2)
+        self.assertEqual(data_darts1, data_darts3)
+
     def test_short_series_slice(self):
         seriesA, seriesB = self.series1.split_after(pd.Timestamp('20130108'))
         self.assertEqual(len(seriesA), 8)
@@ -481,13 +523,24 @@ class TimeSeriesTestCase(DartsBaseTestClass):
             series.map(ufunc_add)
 
     def test_gaps(self):
-        times = pd.date_range('20130101', '20130110')
-        pd_series1 = pd.Series([1, 1] + 3 * [np.nan] + [1, 1, 1] + [np.nan] * 2, index=times)
-        pd_series2 = pd.Series([1, 1] + 3 * [np.nan] + [1, 1] + [np.nan] * 3, index=times)
-        pd_series3 = pd.Series([np.nan] * 10, index=times)
+        times1 = pd.date_range('20130101', '20130110')
+        times2 = pd.date_range('20120101', '20210301', freq="Q")
+        times3 = pd.date_range('20120101', '20210301', freq="AS")
+        times4 = pd.date_range('20120101', '20210301', freq="2MS")
+
+        pd_series1 = pd.Series([1, 1] + 3 * [np.nan] + [1, 1, 1] + [np.nan] * 2, index=times1)
+        pd_series2 = pd.Series([1, 1] + 3 * [np.nan] + [1, 1] + [np.nan] * 3, index=times1)
+        pd_series3 = pd.Series([np.nan] * 10, index=times1)
+        pd_series4 = pd.Series([1]*5 + 3*[np.nan] + [1]*18 + 7*[np.nan] + [1, 1] + [np.nan], index=times2)
+        pd_series5 = pd.Series([1]*3 + 2*[np.nan] + [1] + 2*[np.nan] + [1, 1], index=times3)
+        pd_series6 = pd.Series([1]*10 + 1*[np.nan] + [1]*13 + 5*[np.nan] + [1]*18 + 9*[np.nan], index=times4)
+
         series1 = TimeSeries.from_series(pd_series1)
         series2 = TimeSeries.from_series(pd_series2)
         series3 = TimeSeries.from_series(pd_series3)
+        series4 = TimeSeries.from_series(pd_series4)
+        series5 = TimeSeries.from_series(pd_series5)
+        series6 = TimeSeries.from_series(pd_series6)
 
         gaps1 = series1.gaps()
         self.assertTrue((gaps1['gap_start'] == pd.DatetimeIndex([pd.Timestamp('20130103'),
@@ -499,6 +552,22 @@ class TimeSeriesTestCase(DartsBaseTestClass):
         self.assertEqual(gaps2['gap_size'].values.tolist(), [3, 3])
         gaps3 = series3.gaps()
         self.assertEqual(gaps3['gap_size'].values.tolist(), [10])
+        gaps4 = series4.gaps()
+        self.assertEqual(gaps4['gap_size'].values.tolist(), [3, 7, 1])
+        gaps5 = series5.gaps()
+        self.assertEqual(gaps5['gap_size'].values.tolist(), [2, 2])
+        self.assertTrue((gaps5['gap_start'] == pd.DatetimeIndex([pd.Timestamp('20150101'),
+                                                                 pd.Timestamp('20180101')])).all())
+        self.assertTrue((gaps5['gap_end'] == pd.DatetimeIndex([pd.Timestamp('20160101'),
+                                                                pd.Timestamp('20190101')])).all())
+        gaps6 = series6.gaps()
+        self.assertEqual(gaps6['gap_size'].values.tolist(), [1, 5, 9])
+        self.assertTrue((gaps6['gap_start'] == pd.DatetimeIndex([pd.Timestamp('20130901'),
+                                                                 pd.Timestamp('20160101'),
+                                                                 pd.Timestamp('20191101')])).all())
+        self.assertTrue((gaps6['gap_end'] == pd.DatetimeIndex([pd.Timestamp('20130901'),
+                                                                pd.Timestamp('20160901'),
+                                                                pd.Timestamp('20210301')])).all())
 
     def test_longest_contiguous_slice(self):
         times = pd.date_range('20130101', '20130111')
