@@ -36,6 +36,12 @@ jobs:
       - name: "5. Tests"
         run: |
           ./gradlew "test_${{matrix.flavour}}"
+          ./coverage.sh xml
+
+      - name: "6. Upload coverage to Codecov"
+        uses: codecov/codecov-action@v1
+        with:
+          files: ./coverage.xml
 
   docs:
     runs-on: ubuntu-latest
